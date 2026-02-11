@@ -195,17 +195,21 @@ def main():
     st.set_page_config(page_title="同盟の宝物予測ツール", layout="wide")
     st.title("🏴‍☠️ 王冠配置予測ツール")
 
-    # セッションステート初期化
     if 'board_bool' not in st.session_state:
-        st.session_state.board_bool = pd.DataFrame(np.ones((12, 10), dtype=bool))
+        # インデックスを1~12にするためにindex引数を指定
+        st.session_state.board_bool = pd.DataFrame(
+            np.ones((12, 10), dtype=bool),
+            index=range(1, 13) # 行番号 1-12
+        )
     
-    # 【修正点1】リセット用のカウンターを用意
     if 'reset_key' not in st.session_state:
         st.session_state.reset_key = 0
 
-    # 【修正点2】リセット時にカウンターを加算してIDを変更する
     def reset_board():
-        st.session_state.board_bool = pd.DataFrame(np.ones((12, 10), dtype=bool))
+        st.session_state.board_bool = pd.DataFrame(
+            np.ones((12, 10), dtype=bool),
+            index=range(1, 13) # リセット時も行番号を指定
+        )
         st.session_state.reset_key += 1
 
     config = GameConfig()
@@ -213,13 +217,15 @@ def main():
     # --- サイドバー (入力) ---
     def render_item_input(key, label, color):
         max_val = config.total_counts[key]
-        c1, c2 = st.sidebar.columns([1, 2])
+        c1, c2 = st.sidebar.columns([1, 2.5]) # 比率を変更して画像カラムを狭く
         with c1:
             img_path = f"images/{key}.png"
             if os.path.exists(img_path):
-                st.image(img_path, use_container_width=True)
+                # widthを指定して画像を小さく表示
+                st.image(img_path, width=40) 
             else:
-                st.pyplot(draw_icon(config.base_shapes_coords[key], color), use_container_width=True)
+                # matplotlib図形も小さく
+                st.pyplot(draw_icon(config.base_shapes_coords[key], color), use_container_width=False)
         with c2:
             found = st.number_input(f"{label}\n(発見数)", 0, max_val, 0, key=key)
             if key in ['target', 'blank', 'item4']:
@@ -233,7 +239,7 @@ def main():
     st.sidebar.info(
     """
     **Created by: ｵｺｼﾞｮ** 
-    ※本ツールはアーチャー伝説2の**"同盟の宝物"イベントの王冠の位置を予測するツール**です。
+    ※本ツールはアーチャー伝説2の"同盟の宝物"イベントの王冠の位置を予測するツールです。
     """
     )
     
@@ -263,21 +269,27 @@ def main():
     # --- メインエリア ---
     col1, col2 = st.columns([3, 1])
     with col1:
-        st.subheader("2. 盤面状況")
-        st.caption("クリックしてチェックを外すと「未確定エリア(0)」になります。")
+        st.subheader("盤面状況")
+        st.caption("未確定エリアのチェックを外してください。")
     with col2:
         st.button("🔄 リセット", on_click=reset_board)
 
-    # 【修正点3】key引数にカウンターを使って、強制再描画させる
-    column_cfg = {str(i): st.column_config.CheckboxColumn(label="", width="small", default=True) for i in range(10)}
+    # チェックボックスの列設定（ラベルを表示）
+    column_cfg = {
+        str(i): st.column_config.CheckboxColumn(
+            label=str(i+1), # 列ヘッダーを 1, 2, 3... にする
+            width="small", 
+            default=True
+        ) for i in range(10)
+    }
     
     edited_df = st.data_editor(
         st.session_state.board_bool,
         column_config=column_cfg,
-        hide_index=True,
-        use_container_width=False,
-        height=450,
-        key=f"board_editor_{st.session_state.reset_key}" # IDを動的に変更
+        hide_index=False, # 行番号（インデックス）を表示する
+        use_container_width=True, # スマホ幅いっぱいに使う
+        height=500, # 高さを少し確保
+        key=f"board_editor_{st.session_state.reset_key}"
     )
     
     grid = edited_df.to_numpy().astype(int)
@@ -292,9 +304,9 @@ def main():
     
     valid_input = False
     if gap_area < 0:
-        c3.error(f"マス不足: あと {abs(gap_area)} マス空けてください")
+        c3.error(f"マス不足: あと {abs(gap_area)} マス")
     else:
-        c3.success(f"計算対象の隙間: {gap_area} マス")
+        c3.success(f"計算対象: {gap_area} マス")
         valid_input = True
 
     if st.button("🚀 予測実行 (15秒)", type="primary", disabled=not valid_input):
@@ -310,7 +322,6 @@ def main():
             success_count = result_info
             st.success(f"{success_count} パターンの配置から算出しました")
             
-            # 修正済み: 「王冠」判定
             if "王冠" in view_mode:
                 prob_map = (target_hits / success_count) * 100
                 title = "👑王冠がある確率"
@@ -322,7 +333,20 @@ def main():
 
             prob_map[grid == 1] = 0 
             fig, ax = plt.subplots(figsize=(8, 6))
-            sns.heatmap(prob_map, annot=True, fmt=".0f", cmap=cmap, cbar_kws={'label': '%'}, ax=ax, square=True, linewidths=1, linecolor='gray')
+            # ヒートマップのラベルも 1始まりに調整
+            sns.heatmap(
+                prob_map, 
+                annot=True, 
+                fmt=".0f", 
+                cmap=cmap, 
+                cbar_kws={'label': '%'}, 
+                ax=ax, 
+                square=True, 
+                linewidths=1, 
+                linecolor='gray',
+                xticklabels=range(1, 11), # X軸 1~10
+                yticklabels=range(1, 13)  # Y軸 1~12
+            )
             ax.set_title(title)
             st.pyplot(fig)
 
