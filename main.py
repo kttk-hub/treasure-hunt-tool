@@ -12,20 +12,47 @@ import os
 # 再帰深度の制限緩和
 sys.setrecursionlimit(3000)
 
+# --- CSS注入: スマホ表示の最適化 ---
+def inject_custom_css():
+    st.markdown("""
+        <style>
+            /* メインエリアの余白を極限まで削る */
+            .block-container {
+                padding-top: 1rem;
+                padding-bottom: 5rem;
+                padding-left: 0.2rem;
+                padding-right: 0.2rem;
+            }
+            /* サイドバーの画像を小さくする */
+            [data-testid="stSidebar"] img {
+                max-width: 40px !important;
+            }
+            /* データエディタのヘッダー文字サイズ調整 */
+            [data-testid="stDataFrame"] th {
+                font-size: 12px !important;
+                padding: 4px !important;
+            }
+            /* チェックボックスのセル余白を詰める */
+            [data-testid="stDataFrame"] td {
+                padding: 0px !important;
+            }
+        </style>
+    """, unsafe_allow_html=True)
+
 # --- 1. 定数・形状定義 ---
 class GameConfig:
     def __init__(self):
         self.height = 12
         self.width = 10
         self.base_shapes_coords = {
-            'item1': [(0,0),(1,0),(2,0),(0,1),(1,1),(2,1)],
-            'item2': [(0,0),(1,0),(0,1),(1,1)],
-            'item3': [(0,0),(1,0),(2,0),(1,1)],
-            'item5': [(0,0),(1,0),(2,0),(0,1)],
-            'item6': [(0,0),(1,0),(2,0),(0,1),(1,1),(0,2)],
-            'item4': [(0,0),(1,0)],
-            'target': [(0,0)],
-            'blank': [(0,0)]
+            'item1': [(0,0),(1,0),(2,0),(0,1),(1,1),(2,1)], # 2x3 (6)
+            'item2': [(0,0),(1,0),(0,1),(1,1)],             # 2x2 (4)
+            'item3': [(0,0),(1,0),(2,0),(1,1)],             # T字 (4)
+            'item5': [(0,0),(1,0),(2,0),(0,1)],             # L字 (4)
+            'item6': [(0,0),(1,0),(2,0),(0,1),(1,1),(0,2)], # 階段 (6)
+            'item4': [(0,0),(1,0)],                         # 1x2 (2)
+            'target': [(0,0)],                              # 当たり (1)
+            'blank': [(0,0)]                                # 空白 (1)
         }
         self.shapes = self._init_shapes()
         self.items_size4 = ['item2', 'item3', 'item5']
@@ -84,41 +111,79 @@ def draw_icon(coords, color='skyblue'):
 class Solver:
     def __init__(self, config):
         self.cfg = config
-        self.valid_i1_i6_pairs = [(5, 4), (4, 5), (3, 6), (6, 3), (7, 2), (2, 7)]
+        # アイテム1と6の合計9個ルール
+        self.valid_i1_i6_pairs = [
+            (5, 4), (4, 5), (3, 6), (6, 3), (7, 2), (2, 7)
+        ]
 
     def _generate_valid_item_pool(self, gap_area, found_counts):
-        possible_pairs = []
-        for total_i1, total_i6 in self.valid_i1_i6_pairs:
-            if total_i1 >= found_counts['item1'] and total_i6 >= found_counts['item6']:
-                possible_pairs.append((total_i1, total_i6))
+        """
+        新ルール適用版:
+        1. Item1, Item6 はペアリストから選択 (合計9個)
+        2. Item2, Item3, Item5 は合計9個になる組み合わせから選択 (各最低1個)
+        """
         
-        if not possible_pairs: return None
+        # --- 1. Item1 & Item6 (Total 9) ---
+        possible_pairs_16 = []
+        for n1, n6 in self.valid_i1_i6_pairs:
+            if n1 >= found_counts['item1'] and n6 >= found_counts['item6']:
+                possible_pairs_16.append((n1, n6))
+        
+        if not possible_pairs_16:
+            return None # 矛盾
 
-        target_i1_total, target_i6_total = random.choice(possible_pairs)
-        needed_i1 = target_i1_total - found_counts['item1']
-        needed_i6 = target_i6_total - found_counts['item6']
+        # ペアをランダムに決定
+        target_n1, target_n6 = random.choice(possible_pairs_16)
         
-        area_used_by_1_6 = (needed_i1 + needed_i6) * 6
-        remaining_gap = gap_area - area_used_by_1_6
+        # --- 2. Item2, 3, 5 (Total 9, Min 1 each) ---
+        # 合計9個になり、かつ発見数と矛盾しない組み合わせを全探索してリスト化
+        possible_trios_235 = []
         
-        if remaining_gap < 0 or remaining_gap % 4 != 0: return None
-        count_size4 = remaining_gap // 4
+        # item2 (1~7個) ※他が最低1なので最大7
+        for n2 in range(1, 8):
+            # item3 (1~7個)
+            for n3 in range(1, 8):
+                n5 = 9 - (n2 + n3)
+                if n5 < 1: continue # item5も最低1個
+                
+                # 発見数チェック
+                if (n2 >= found_counts['item2'] and 
+                    n3 >= found_counts['item3'] and 
+                    n5 >= found_counts['item5']):
+                    possible_trios_235.append((n2, n3, n5))
         
+        if not possible_trios_235:
+            return None # 矛盾
+
+        target_n2, target_n3, target_n5 = random.choice(possible_trios_235)
+
+        # --- 3. プール生成 ---
         pool = []
-        pool.extend(['item1'] * needed_i1)
-        pool.extend(['item6'] * needed_i6)
         
-        mandatory_size4 = []
-        if found_counts['item2'] == 0: mandatory_size4.append('item2')
-        if found_counts['item3'] == 0: mandatory_size4.append('item3')
-        if found_counts['item5'] == 0: mandatory_size4.append('item5')
+        # 必要な追加分を計算 (ターゲット数 - 発見済み数)
+        # ※シミュレーションでは「まだ埋まっていない空き地」に「まだ見つかっていないアイテム」を埋めるため
+        add_n1 = target_n1 - found_counts['item1']
+        add_n6 = target_n6 - found_counts['item6']
+        add_n2 = target_n2 - found_counts['item2']
+        add_n3 = target_n3 - found_counts['item3']
+        add_n5 = target_n5 - found_counts['item5']
         
-        if len(mandatory_size4) > count_size4: return None
-        pool.extend(mandatory_size4)
+        pool.extend(['item1'] * add_n1)
+        pool.extend(['item6'] * add_n6)
+        pool.extend(['item2'] * add_n2)
+        pool.extend(['item3'] * add_n3)
+        pool.extend(['item5'] * add_n5)
+
+        # --- 4. 面積チェック ---
+        # 生成したプールの合計面積が、盤面の空き面積(gap_area)と一致するか確認
+        current_pool_area = (
+            (add_n1 + add_n6) * 6 + 
+            (add_n2 + add_n3 + add_n5) * 4
+        )
         
-        remaining_slots = count_size4 - len(mandatory_size4)
-        for _ in range(remaining_slots):
-            pool.append(random.choice(self.cfg.items_size4))
+        if current_pool_area != gap_area:
+            return None # 面積が合わない（ユーザーの入力ミスやチェック漏れの可能性）
+
         return pool
 
     def solve_high_precision(self, fixed_board, fixed_items_remaining, found_counts, iterations=1000, time_limit=5):
@@ -168,6 +233,8 @@ class Solver:
         while True:
             if loop_count >= iterations or (time.time() - start_time > time_limit): break
             loop_count += 1
+            
+            # 新ルールでプール生成
             item_pool_variable = self._generate_valid_item_pool(gap_area, found_counts)
             if item_pool_variable is None: continue
 
@@ -187,19 +254,23 @@ class Solver:
                 occupied_mask = (completed_board == 1) & (base_calc_board == 0)
                 occupancy_hits[occupied_mask] += 1
 
-        if valid_solutions == 0: return None, None, "有効な配置が見つかりませんでした。"
+        if valid_solutions == 0: return None, None, "有効な配置が見つかりませんでした。入力情報とルール（合計個数など）に矛盾がある可能性があります。"
         return target_hits, occupancy_hits, valid_solutions
 
 # --- 4. UI ---
 def main():
     st.set_page_config(page_title="同盟の宝物予測ツール", layout="wide")
+    
+    # CSS注入を実行
+    inject_custom_css()
+    
     st.title("🏴‍☠️ 王冠配置予測ツール")
 
+    # セッションステート初期化
     if 'board_bool' not in st.session_state:
-        # インデックスを1~12にするためにindex引数を指定
         st.session_state.board_bool = pd.DataFrame(
             np.ones((12, 10), dtype=bool),
-            index=range(1, 13) # 行番号 1-12
+            index=range(1, 13)
         )
     
     if 'reset_key' not in st.session_state:
@@ -208,7 +279,7 @@ def main():
     def reset_board():
         st.session_state.board_bool = pd.DataFrame(
             np.ones((12, 10), dtype=bool),
-            index=range(1, 13) # リセット時も行番号を指定
+            index=range(1, 13)
         )
         st.session_state.reset_key += 1
 
@@ -217,34 +288,31 @@ def main():
     # --- サイドバー (入力) ---
     def render_item_input(key, label, color):
         max_val = config.total_counts[key]
-        c1, c2 = st.sidebar.columns([1, 2.5]) # 比率を変更して画像カラムを狭く
+        c1, c2 = st.sidebar.columns([0.8, 2.7])
         with c1:
             img_path = f"images/{key}.png"
             if os.path.exists(img_path):
-                # widthを指定して画像を小さく表示
-                st.image(img_path, width=40) 
+                st.image(img_path, width=35) 
             else:
-                # matplotlib図形も小さく
                 st.pyplot(draw_icon(config.base_shapes_coords[key], color), use_container_width=False)
         with c2:
-            found = st.number_input(f"{label}\n(発見数)", 0, max_val, 0, key=key)
+            found = st.number_input(f"{label}\n(発見)", 0, max_val, 0, key=key)
             if key in ['target', 'blank', 'item4']:
                 remaining = max_val - found
-                st.caption(f"残り: **{remaining}**")
+                st.caption(f"残: **{remaining}**")
                 return found, remaining
             return found, None
 
-    st.sidebar.header("発見情報の入力")
+    st.sidebar.header("発見情報を入力")
     st.sidebar.info("本ツールURLの無断転載は禁じています。")
     st.sidebar.info(
     """
-    **Created by: ｵｺｼﾞｮ** 
-    ※本ツールはアーチャー伝説2の"同盟の宝物"イベントの王冠の位置を予測するツールです。
+    **Created by: ｵｺｼﾞｮ** ※本ツールはアーチャー伝説2の**"同盟の宝物"イベントの王冠の位置を予測するツール**です。
     """
     )
     
     st.sidebar.markdown("---")
-    st.sidebar.markdown("#### 個数固定アイテム")
+    st.sidebar.markdown("#### 固定アイテム")
     f_target, r_target = render_item_input('target', '王冠', '#ff9999')
     f_blank, r_blank = render_item_input('blank', '空白', '#eeeeee')
     f_item4, r_item4 = render_item_input('item4', '矢尻？', '#99ff99')
@@ -252,7 +320,7 @@ def main():
     fixed_remaining = {'target': r_target, 'blank': r_blank, 'item4': r_item4}
 
     st.sidebar.markdown("---")
-    st.sidebar.markdown("#### 個数変動アイテム")
+    st.sidebar.markdown("#### 変動アイテム")
     found_counts = {}
     found_counts['item1'], _ = render_item_input('item1', '宝箱', '#99ccff')
     found_counts['item6'], _ = render_item_input('item6', '弓', '#99ccff')
@@ -269,15 +337,15 @@ def main():
     # --- メインエリア ---
     col1, col2 = st.columns([3, 1])
     with col1:
-        st.subheader("盤面状況")
-        st.caption("未確定エリアのチェックを外してください。")
+        st.subheader("2. 盤面状況")
+        st.caption("チェック外す=未確定(0)")
     with col2:
         st.button("🔄 リセット", on_click=reset_board)
 
-    # チェックボックスの列設定（ラベルを表示）
+    # チェックボックス設定
     column_cfg = {
         str(i): st.column_config.CheckboxColumn(
-            label=str(i+1), # 列ヘッダーを 1, 2, 3... にする
+            label=str(i+1), 
             width="small", 
             default=True
         ) for i in range(10)
@@ -286,9 +354,9 @@ def main():
     edited_df = st.data_editor(
         st.session_state.board_bool,
         column_config=column_cfg,
-        hide_index=False, # 行番号（インデックス）を表示する
-        use_container_width=True, # スマホ幅いっぱいに使う
-        height=500, # 高さを少し確保
+        hide_index=False, 
+        use_container_width=True,
+        height=480, 
         key=f"board_editor_{st.session_state.reset_key}"
     )
     
@@ -300,12 +368,17 @@ def main():
     
     st.markdown("---")
     c1, c2, c3 = st.columns(3)
-    c1.metric("未確定マス数", f"{unknown_count}")
+    c1.metric("未確定", f"{unknown_count}")
     
     valid_input = False
     if gap_area < 0:
-        c3.error(f"マス不足: あと {abs(gap_area)} マス")
+        c3.error(f"不足: {abs(gap_area)}")
     else:
+        # 【重要】面積がルールと整合しているか簡易チェック
+        # アイテム1,6の残り面積候補 (ペアの合計9個 - 発見済み) * 6
+        # アイテム2,3,5の残り面積候補 (合計9個 - 発見済み) * 4
+        # これらが gap_area と一致する組み合わせが存在するか？
+        # 計算が複雑になるため、ここでは「面積が合わない可能性」への警告はシミュレーション結果に委ねる
         c3.success(f"計算対象: {gap_area} マス")
         valid_input = True
 
@@ -333,7 +406,6 @@ def main():
 
             prob_map[grid == 1] = 0 
             fig, ax = plt.subplots(figsize=(8, 6))
-            # ヒートマップのラベルも 1始まりに調整
             sns.heatmap(
                 prob_map, 
                 annot=True, 
@@ -344,8 +416,8 @@ def main():
                 square=True, 
                 linewidths=1, 
                 linecolor='gray',
-                xticklabels=range(1, 11), # X軸 1~10
-                yticklabels=range(1, 13)  # Y軸 1~12
+                xticklabels=range(1, 11),
+                yticklabels=range(1, 13)
             )
             ax.set_title(title)
             st.pyplot(fig)
