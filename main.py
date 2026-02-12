@@ -84,7 +84,7 @@ def draw_icon(coords, color='skyblue'):
 class Solver:
     def __init__(self, config):
         self.cfg = config
-        self.valid_i1_i6_pairs = [(5, 4), (4, 5), (3, 6), (7, 2), (2, 7)]
+        self.valid_i1_i6_pairs = [(5, 4), (4, 5), (3, 6), (6, 3), (7, 2), (2, 7)]
 
     def _generate_valid_item_pool(self, gap_area, found_counts):
         possible_pairs = []
